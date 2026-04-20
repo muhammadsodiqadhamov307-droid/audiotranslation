@@ -23,7 +23,7 @@ from pipeline.transcribe_translate import transcribe_translate_chunks
 from pipeline.utils import ensure_ffmpeg, probe_duration, safe_unlink
 
 
-load_dotenv()
+load_dotenv(override=True)
 
 logger = logging.getLogger("video_dubbing")
 

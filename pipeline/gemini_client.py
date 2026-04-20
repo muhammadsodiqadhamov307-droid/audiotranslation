@@ -1,12 +1,16 @@
 import os
 
+from dotenv import load_dotenv
 from google import genai
 
 
 def gemini_client():
+    load_dotenv(override=True)
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is missing. Add it to your .env file.")
+    if len(api_key) < 20:
+        raise RuntimeError("GEMINI_API_KEY looks too short. Paste the full key from Google AI Studio into .env.")
     return genai.Client(api_key=api_key)
 
 

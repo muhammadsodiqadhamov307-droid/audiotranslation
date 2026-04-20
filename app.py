@@ -18,7 +18,7 @@ from pipeline.chunk_audio import chunk_audio
 from pipeline.extract_audio import extract_audio
 from pipeline.merge_video import merge_audio_and_subtitles
 from pipeline.subtitles import write_srt
-from pipeline.text_to_speech import synthesize_dubbed_audio
+from pipeline.tts_router import synthesize_dubbed_audio
 from pipeline.transcribe_translate import transcribe_translate_chunks
 from pipeline.utils import ensure_ffmpeg, probe_duration, safe_unlink
 
@@ -168,16 +168,16 @@ def process_job(job_id, file_id, video_path, source_language, target_language):
             details = f" Details: {' '.join(gemini_warnings)}" if gemini_warnings else ""
             raise RuntimeError(f"Gemini returned no transcript. Check the source language and audio track.{details}")
 
-        def tts_progress(current, total):
+        def tts_progress(current, total, engine_label):
             progress = 72 + int((current / max(total, 1)) * 14)
             update_job(
                 job_id,
                 step="Generating dubbed audio",
                 progress=progress,
-                message=f"Generating dubbed audio segment {current} of {total} with Kokoro.",
+                message=f"Generating dubbed audio with {engine_label}: segment {current} of {total}.",
             )
 
-        update_job(job_id, step="Generating dubbed audio", progress=72, message="Generating and timing dubbed speech with Kokoro.")
+        update_job(job_id, step="Generating dubbed audio", progress=72, message="Selecting the local TTS engine and timing dubbed speech.")
         dubbed_audio_path, tts_warning = synthesize_dubbed_audio(
             translated_segments,
             target_language,

@@ -6,3 +6,11 @@ python-dotenv
 kokoro
 soundfile
 numpy
+transformers>=4.33.0
+torch
+scipy
+qwen-tts
+
+# Optional: Sayro examples reference uzbek_normalizer, but it is not published
+# under this exact PyPI name for every environment. The app uses it when present.
+# uzbek_normalizer

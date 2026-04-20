@@ -1,17 +1,19 @@
-# Technical Reference: Gemini + Kokoro Video Translation And Dubbing
+# Technical Reference: Gemini, Kokoro, Sayro Video Translation And Dubbing
 
 ## 1. Purpose
 
 This application translates and dubs uploaded videos. Users select a source language and target language, then receive a dubbed MP4 and translated SRT subtitle file.
 
-The app uses Gemini only for transcription and translation. Voice generation is performed locally with Kokoro TTS, so the dubbing stage has no Gemini TTS quota or rate limit.
+Gemini handles transcription and translation. Voice generation runs locally: Kokoro for English and Russian, Sayro for Uzbek, and Meta MMS as the Uzbek fallback.
 
 ## 2. Stack
 
 - Backend: Python, FastAPI, Uvicorn
 - Frontend: static HTML, CSS, JavaScript
 - AI transcription and translation: `google-genai` with Gemini Flash models
-- TTS: `kokoro`, `soundfile`, `numpy`
+- English/Russian TTS: `kokoro`, `soundfile`, `numpy`
+- Uzbek TTS primary: `uzlm/sayro-tts-1.7B` via `qwen_tts`
+- Uzbek TTS fallback: `facebook/mms-tts-uzb-script_cyrillic` via `transformers`
 - Audio/video processing: FFmpeg and FFprobe
 - Storage: local filesystem only
 
@@ -34,21 +36,22 @@ GEMINI_API_KEY=your_key_here
 Optional Gemini model list:
 
 ```env
-GEMINI_TRANSCRIBE_MODELS=gemini-2.5-flash,gemini-2.0-flash,gemini-2.5-flash-lite,gemini-2.0-flash-lite,gemini-3.1-flash-lite-preview
+GEMINI_TRANSCRIBE_MODELS=gemini-2.0-flash,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-lite
 ```
 
-Optional Kokoro voice overrides:
+Optional TTS overrides:
 
 ```env
 KOKORO_EN_LANG=a
 KOKORO_EN_VOICE=af_heart
 KOKORO_RU_LANG=r
 KOKORO_RU_VOICE=rf_voice
-KOKORO_UZ_LANG=r
-KOKORO_UZ_VOICE=rf_voice
+SAYRO_MODEL=uzlm/sayro-tts-1.7B
+SAYRO_DEVICE=cpu
+MMS_UZ_MODEL=facebook/mms-tts-uzb-script_cyrillic
 ```
 
-The installed `kokoro` package may not support `r` for Russian in all versions. If a configured language or voice is rejected, the app falls back to `a` / `af_heart` and reports a warning.
+Sayro is large and may require Hugging Face access approval. If it cannot load, the app falls back to MMS.
 
 ## 5. Runtime Directories
 
@@ -133,7 +136,7 @@ Public job state:
   "status": "running",
   "step": "Generating dubbed audio",
   "progress": 80,
-  "message": "Generating dubbed audio segment 3 of 12 with Kokoro.",
+  "message": "Generating dubbed audio with Sayro Uzbek TTS: segment 3 of 12.",
   "warning": "",
   "downloads": {},
   "revision": 5
@@ -202,32 +205,59 @@ Overlap deduplication:
 Drop segments from chunk N+1 when start_sec < previous_chunk_last_end - 2
 ```
 
-### Step 4: Kokoro TTS
+### Step 4: TTS Routing
 
-File: `pipeline/text_to_speech.py`
+File: `pipeline/tts_router.py`
 
-Kokoro runs locally on CPU. The app initializes:
+Routing:
+
+```python
+def get_tts_engine(target_language: str):
+    if target_language == "en":
+        return KokoroEngine(lang="a", voice="af_heart")
+    if target_language == "ru":
+        return KokoroEngine(lang="r", voice="rf_voice")
+    if target_language == "uz":
+        return SayroEngine(
+            primary="uzlm/sayro-tts-1.7B",
+            fallback="facebook/mms-tts-uzb-script_cyrillic",
+        )
+```
+
+### Step 5: Kokoro TTS
+
+File: `pipeline/tts_kokoro.py`
+
+Kokoro runs locally on CPU:
 
 ```python
 KPipeline(lang_code=lang_code, device="cpu")
 ```
 
-Audio is generated for each segment:
+WAV output is written at 24000 Hz.
 
-```python
-for _, _, audio in pipeline(text, voice=voice, speed=1.0):
-    samples.append(audio)
+### Step 6: Sayro And MMS Uzbek TTS
+
+Files:
+
+```text
+pipeline/tts_sayro.py
+pipeline/tts_mms.py
 ```
 
-The WAV output is written with:
+Sayro is tried first. Uzbek text is cleaned through `clean_uzbek_text()` when `uzbek_normalizer` is available.
 
-```python
-soundfile.write(path, audio_array, 24000)
+If Sayro raises any exception, MMS is used automatically and the warning is sent to the UI:
+
+```text
+Sayro TTS unavailable - used Meta MMS fallback for Uzbek voice
 ```
 
-If Kokoro fails for a segment, the app inserts silence of the same duration and continues.
+If MMS also fails for a segment, the app inserts silence with the same target duration.
 
-### Step 5: Timing Correction
+### Step 7: Timing Correction
+
+File: `pipeline/timing.py`
 
 Generated segment audio is fitted to:
 
@@ -237,7 +267,7 @@ target_duration = end_sec - start_sec
 
 FFmpeg applies chained `atempo` filters. If the ratio is above `4.0` or below `0.25`, the app clamps it and adds a warning.
 
-### Step 6: Concatenate Dubbed Audio
+### Step 8: Concatenate Dubbed Audio
 
 Timed WAV files and silence gaps are concatenated into:
 
@@ -245,13 +275,13 @@ Timed WAV files and silence gaps are concatenated into:
 dubbed_audio.wav
 ```
 
-### Step 7: Generate Subtitles
+### Step 9: Generate Subtitles
 
 File: `pipeline/subtitles.py`
 
 The app writes valid SRT subtitles from `translated_text`.
 
-### Step 8: Merge Final Video
+### Step 10: Merge Final Video
 
 File: `pipeline/merge_video.py`
 
@@ -291,7 +321,8 @@ The frontend provides:
 - Same source and target language is rejected.
 - Gemini invalid JSON is retried once with a stricter prompt.
 - Gemini `429 RESOURCE_EXHAUSTED` triggers model fallback/backoff.
-- Kokoro segment failure inserts silence and records a warning.
+- Sayro failure uses MMS fallback.
+- MMS segment failure inserts silence.
 - FFmpeg failures surface through the SSE job message.
 
 ## 11. Cleanup
@@ -345,9 +376,8 @@ Stop-Process -Id <pid> -Force
 
 Gemini timestamps are approximate because Gemini is not a dedicated forced-alignment model.
 
-Kokoro language support depends on the installed package and available voice files. Russian and Uzbek may require fallback behavior in the currently installed upstream package.
+Kokoro language support depends on the installed package and available voice files. Russian may require fallback behavior in the currently installed upstream package.
 
-Uzbek TTS is low-resource across local/free engines. The app warns when Uzbek uses fallback phonetics.
+Sayro is a large local model. CPU inference can be slow, and the first run may take a long time because models must download and load.
 
 Jobs are in memory and are not durable across server restarts.
-

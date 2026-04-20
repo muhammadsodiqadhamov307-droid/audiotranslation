@@ -91,14 +91,18 @@ def build_prompt(source_language, target_language, strict=False):
     )
     return (
         strict_note
-        + f"Transcribe this audio in {source_name}. "
-        + "Return a JSON array where each element has start_sec as a float, "
-        + "end_sec as a float, original_text as a string, and translated_text as a string. "
-        + f"Translate each text segment into {target_name}. "
-        + "Use timestamps relative to the beginning of this audio chunk. "
-        + "Keep segments short enough for subtitles: split long speech into multiple segments, "
-        + "avoid putting more than one sentence in a segment, and do not assign long translated text to a very short time range. "
-        + "Return ONLY valid JSON, no markdown, no explanation."
+        + "You are a transcription and translation engine.\n"
+        + f"Transcribe this audio in {source_name}.\n"
+        + f"Then translate each segment into {target_name}.\n"
+        + "Return ONLY a valid JSON array. No markdown, no explanation.\n"
+        + "Each element must have:\n"
+        + "{\n"
+        + "  start_sec: float,\n"
+        + "  end_sec: float,\n"
+        + "  original_text: string,\n"
+        + "  translated_text: string\n"
+        + "}\n"
+        + "Use timestamps relative to the beginning of this audio chunk."
     )
 
 

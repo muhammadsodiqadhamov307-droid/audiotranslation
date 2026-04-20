@@ -1,19 +1,21 @@
-# Gemini + Kokoro Video Translation And Dubbing
+# Gemini, Kokoro, Sayro Video Translation And Dubbing
 
-A local FastAPI web app that uploads a video, transcribes and translates speech with Gemini, generates dubbed speech locally with Kokoro TTS, and returns:
+A local FastAPI web app that uploads a video, transcribes and translates speech with Gemini, generates dubbed speech locally, and returns:
 
 - A dubbed `.mp4`
 - A downloadable translated `.srt`
 - The `.srt` embedded in the MP4 as a soft subtitle track
 
-Everything is local except the Gemini transcription/translation calls. There is no Google Cloud, no Cloud Storage, and no Gemini TTS quota.
+Everything is local except the Gemini transcription and translation calls. There is no Google Cloud project, no Cloud Storage, and no Gemini TTS quota.
 
 ## Stack
 
 - Backend: FastAPI + Uvicorn
 - Frontend: single-page HTML/CSS/JS
 - Transcription + translation: `google-genai` with Gemini Flash models
-- TTS: Kokoro local CPU TTS
+- English/Russian TTS: Kokoro local CPU TTS
+- Uzbek TTS primary: Sayro `uzlm/sayro-tts-1.7B`
+- Uzbek TTS fallback: Meta MMS `facebook/mms-tts-uzb-script_cyrillic`
 - Media processing: FFmpeg and FFprobe
 - Credentials: `GEMINI_API_KEY` in `.env`
 
@@ -26,7 +28,11 @@ project/
 |   |-- extract_audio.py
 |   |-- chunk_audio.py
 |   |-- transcribe_translate.py
-|   |-- text_to_speech.py
+|   |-- tts_router.py
+|   |-- tts_kokoro.py
+|   |-- tts_sayro.py
+|   |-- tts_mms.py
+|   |-- timing.py
 |   |-- subtitles.py
 |   `-- merge_video.py
 |-- static/
@@ -58,6 +64,8 @@ Install dependencies:
 ```powershell
 pip install -r requirements.txt
 ```
+
+The first Uzbek run downloads the Sayro and MMS models from Hugging Face into the normal Hugging Face cache. Sayro is a large model and may require accepting the model terms on Hugging Face before it can download.
 
 ## FFmpeg
 
@@ -103,27 +111,39 @@ http://localhost:8000
 Gemini transcription/translation fallback chain:
 
 ```env
-GEMINI_TRANSCRIBE_MODELS=gemini-2.5-flash,gemini-2.0-flash,gemini-2.5-flash-lite,gemini-2.0-flash-lite,gemini-3.1-flash-lite-preview
+GEMINI_TRANSCRIBE_MODELS=gemini-2.0-flash,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-lite
 ```
 
-Kokoro default voice configuration:
+TTS routing:
+
+```text
+English -> Kokoro, lang a, voice af_heart
+Russian -> Kokoro, lang r, voice rf_voice
+Uzbek  -> Sayro uzlm/sayro-tts-1.7B
+Uzbek fallback -> facebook/mms-tts-uzb-script_cyrillic
+```
+
+References:
+
+```text
+Kokoro voices: https://huggingface.co/hexgrad/Kokoro-82M
+Sayro TTS:     https://huggingface.co/uzlm/sayro-tts-1.7B
+MMS fallback:  https://huggingface.co/facebook/mms-tts-uzb-script_cyrillic
+```
+
+Optional overrides:
 
 ```env
 KOKORO_EN_LANG=a
 KOKORO_EN_VOICE=af_heart
 KOKORO_RU_LANG=r
 KOKORO_RU_VOICE=rf_voice
-KOKORO_UZ_LANG=r
-KOKORO_UZ_VOICE=rf_voice
+SAYRO_MODEL=uzlm/sayro-tts-1.7B
+SAYRO_DEVICE=cpu
+MMS_UZ_MODEL=facebook/mms-tts-uzb-script_cyrillic
 ```
 
-Kokoro voice reference:
-
-```text
-https://huggingface.co/hexgrad/Kokoro-82M
-```
-
-Note: the installed `kokoro` package version may not include Russian `r` language support. The app tries the configured language/voice first. If Kokoro rejects it, the app falls back to `a` / `af_heart` and shows a warning instead of failing the job.
+If Sayro fails, is unavailable, or cannot be downloaded, the app automatically uses Meta MMS for Uzbek and shows a warning in the UI. If MMS also fails for a segment, the app inserts silence for that segment and keeps the job moving.
 
 ## Pipeline
 
@@ -156,9 +176,9 @@ myfile = client.files.upload(file="chunk_000.mp3")
 
 6. The app offsets chunk timestamps by `chunk_index * 55`.
 7. The app deduplicates overlap using the previous chunk's last end time minus 2 seconds.
-8. Kokoro generates local WAV audio for each translated segment at 24000 Hz.
+8. The TTS router selects Kokoro for English/Russian or Sayro/MMS for Uzbek.
 9. FFmpeg applies chained `atempo` filters to match segment timing.
-10. FFmpeg concatenates timed WAV files into `dubbed_audio.wav`.
+10. FFmpeg concatenates timed WAV files and silence gaps into `dubbed_audio.wav`.
 11. The app writes `translated_subtitles.srt`.
 12. FFmpeg merges original video, dubbed audio, and subtitles:
 
@@ -181,7 +201,7 @@ ffmpeg -i original_video \
 - Source and target languages cannot be the same.
 - Invalid Gemini JSON is retried once with a stricter prompt.
 - Failed Gemini chunks are skipped with warnings.
-- If Kokoro fails for a segment, the app inserts silence of the same duration and continues.
+- Sayro failures automatically fall back to MMS.
+- MMS failures insert same-duration silence.
 - Extreme `atempo` ratios are clamped and surfaced as warnings.
 - Uploads and intermediate files are deleted after completion or failure.
-

@@ -1,0 +1,34 @@
+# Secrets and local configuration
+.env
+*.pem
+*.key
+service_account.json
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime media and temporary files
+uploads/*
+outputs/*
+!uploads/.gitkeep
+!outputs/.gitkeep
+
+# Logs
+*.log
+uvicorn.out.log
+uvicorn.err.log
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

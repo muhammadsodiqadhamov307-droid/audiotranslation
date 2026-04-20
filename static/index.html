@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Video Translation Studio</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace" aria-labelledby="page-title">
+        <div class="intro">
+          <div>
+            <p class="eyebrow">Local video dubbing</p>
+            <h1 id="page-title">Translate your video into a new voice.</h1>
+            <p class="lede">Upload a video, choose languages, and get an MP4 with dubbed audio plus a matching SRT subtitle file.</p>
+          </div>
+          <img
+            class="studio-image"
+            src="https://images.unsplash.com/photo-1516280440614-37939bbacd81?auto=format&fit=crop&w=560&q=80"
+            alt="Studio microphone beside audio equipment"
+          />
+        </div>
+
+        <form id="translate-form" class="controls">
+          <label id="drop-zone" class="drop-zone" for="video-file">
+            <input id="video-file" type="file" accept=".mp4,.mov,.avi,.mkv,video/*" />
+            <span class="drop-title">Drop video here or browse</span>
+            <span id="file-name" class="drop-copy">MP4, MOV, AVI, or MKV</span>
+          </label>
+
+          <div class="field-grid">
+            <label>
+              <span>Source Language</span>
+              <select id="source-language">
+                <option value="en">English</option>
+                <option value="ru">Russian</option>
+                <option value="uz">Uzbek</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Target Language</span>
+              <select id="target-language">
+                <option value="ru">Russian</option>
+                <option value="en">English</option>
+                <option value="uz">Uzbek</option>
+              </select>
+            </label>
+          </div>
+
+          <button id="submit-button" type="submit">Translate Video</button>
+        </form>
+
+        <section class="progress-area" aria-live="polite">
+          <div class="progress-top">
+            <strong id="status-label">Ready</strong>
+            <span id="progress-percent">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="progress-bar" class="progress-bar"></div>
+          </div>
+          <ol class="steps" id="steps">
+            <li data-step="Extracting audio">Extracting audio</li>
+            <li data-step="Chunking">Chunking</li>
+            <li data-step="Transcribing & translating">Transcribing & translating</li>
+            <li data-step="Generating dubbed audio">Generating dubbed audio</li>
+            <li data-step="Merging video">Merging video</li>
+          </ol>
+          <p id="message" class="message">Choose a video to begin.</p>
+        </section>
+
+        <section id="download-section" class="download-section hidden">
+          <h2>Downloads</h2>
+          <div class="download-actions">
+            <a id="video-download" class="download-link" href="#">Download Dubbed Video</a>
+            <a id="subtitle-download" class="download-link secondary" href="#">Download Subtitles (.srt)</a>
+          </div>
+          <p id="warning" class="warning hidden"></p>
+        </section>
+      </section>
+    </main>
+
+    <script>
+      const CHUNK_SIZE = 8 * 1024 * 1024;
+      const form = document.querySelector("#translate-form");
+      const fileInput = document.querySelector("#video-file");
+      const fileName = document.querySelector("#file-name");
+      const dropZone = document.querySelector("#drop-zone");
+      const sourceLanguage = document.querySelector("#source-language");
+      const targetLanguage = document.querySelector("#target-language");
+      const submitButton = document.querySelector("#submit-button");
+      const statusLabel = document.querySelector("#status-label");
+      const progressPercent = document.querySelector("#progress-percent");
+      const progressBar = document.querySelector("#progress-bar");
+      const message = document.querySelector("#message");
+      const steps = Array.from(document.querySelectorAll(".steps li"));
+      const downloadSection = document.querySelector("#download-section");
+      const videoDownload = document.querySelector("#video-download");
+      const subtitleDownload = document.querySelector("#subtitle-download");
+      const warning = document.querySelector("#warning");
+      let busy = false;
+
+      fileInput.addEventListener("change", () => {
+        fileName.textContent = fileInput.files[0]?.name || "MP4, MOV, AVI, or MKV";
+      });
+
+      sourceLanguage.addEventListener("change", updateSubmitState);
+      targetLanguage.addEventListener("change", updateSubmitState);
+
+      ["dragenter", "dragover"].forEach((eventName) => {
+        dropZone.addEventListener(eventName, (event) => {
+          event.preventDefault();
+          dropZone.classList.add("is-dragging");
+        });
+      });
+
+      ["dragleave", "drop"].forEach((eventName) => {
+        dropZone.addEventListener(eventName, (event) => {
+          event.preventDefault();
+          dropZone.classList.remove("is-dragging");
+        });
+      });
+
+      dropZone.addEventListener("drop", (event) => {
+        const file = event.dataTransfer.files[0];
+        if (file) {
+          fileInput.files = event.dataTransfer.files;
+          fileName.textContent = file.name;
+        }
+      });
+
+      updateSubmitState();
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const file = fileInput.files[0];
+        if (!file) {
+          showError("Choose a video file first.");
+          return;
+        }
+        if (sourceLanguage.value === targetLanguage.value) {
+          showError("Source and target languages must be different.");
+          return;
+        }
+
+        resetDownloads();
+        setBusy(true);
+        try {
+          setProgress(2, "Uploading", "Uploading video chunks.");
+          const fileId = await uploadFileInChunks(file);
+
+          setProgress(5, "Queued", "Starting translation job.");
+          const jobResponse = await fetch("/api/jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              file_id: fileId,
+              source_language: sourceLanguage.value,
+              target_language: targetLanguage.value,
+            }),
+          });
+          const job = await readJson(jobResponse);
+          if (!jobResponse.ok) throw new Error(apiError(job, "Could not start job."));
+          watchJob(job.job_id);
+        } catch (error) {
+          showError(error.message);
+          setBusy(false);
+        }
+      });
+
+      async function uploadFileInChunks(file) {
+        const uploadId = crypto.randomUUID();
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+        let fileId = null;
+
+        for (let index = 0; index < totalChunks; index += 1) {
+          const start = index * CHUNK_SIZE;
+          const chunk = file.slice(start, start + CHUNK_SIZE);
+          const formData = new FormData();
+          formData.append("upload_id", uploadId);
+          formData.append("filename", file.name);
+          formData.append("chunk_index", index);
+          formData.append("total_chunks", totalChunks);
+          formData.append("chunk", chunk);
+
+          const response = await fetch("/api/upload-chunk", { method: "POST", body: formData });
+          const payload = await readJson(response);
+          if (!response.ok) throw new Error(apiError(payload, "Chunk upload failed."));
+          const uploadProgress = Math.round(((index + 1) / totalChunks) * 12);
+          setProgress(uploadProgress, "Uploading", `Uploaded chunk ${index + 1} of ${totalChunks}.`);
+          if (payload.complete) fileId = payload.file_id;
+        }
+
+        if (!fileId) throw new Error("Upload did not complete.");
+        return fileId;
+      }
+
+      function watchJob(jobId) {
+        const events = new EventSource(`/api/jobs/${jobId}/events`);
+        events.onmessage = (event) => {
+          const job = JSON.parse(event.data);
+          renderJob(job);
+
+          if (job.status === "completed") {
+            events.close();
+            videoDownload.href = job.downloads.video;
+            subtitleDownload.href = job.downloads.subtitles;
+            downloadSection.classList.remove("hidden");
+            if (job.warning) {
+              warning.textContent = job.warning;
+              warning.classList.remove("hidden");
+            }
+            setBusy(false);
+            return;
+          }
+
+          if (job.status === "failed") {
+            events.close();
+            const details = job.warning ? `${job.message || "Processing failed."}\n${job.warning}` : job.message || "Processing failed.";
+            showError(details);
+            if (job.warning) {
+              warning.textContent = job.warning;
+              warning.classList.remove("hidden");
+            }
+            setBusy(false);
+          }
+        };
+
+        events.onerror = () => {
+          events.close();
+          showError("Lost the live progress connection. Refresh and check the job state.");
+          setBusy(false);
+        };
+      }
+
+      function renderJob(job) {
+        setProgress(job.progress || 0, job.step || "Processing", job.message || "");
+        steps.forEach((step) => {
+          const active = step.dataset.step === job.step;
+          const finished = stepIndex(step.dataset.step) < stepIndex(job.step);
+          step.classList.toggle("active", active);
+          step.classList.toggle("finished", finished);
+        });
+      }
+
+      function stepIndex(step) {
+        return ["Extracting audio", "Chunking", "Transcribing & translating", "Generating dubbed audio", "Merging video", "Done"].indexOf(step);
+      }
+
+      function setProgress(percent, label, text) {
+        const normalized = Math.max(0, Math.min(100, Math.round(percent)));
+        progressBar.style.width = `${normalized}%`;
+        progressPercent.textContent = `${normalized}%`;
+        statusLabel.textContent = label;
+        message.textContent = text;
+      }
+
+      function showError(text) {
+        statusLabel.textContent = "Error";
+        message.textContent = text;
+        progressBar.style.width = "0%";
+        progressPercent.textContent = "0%";
+      }
+
+      function setBusy(isProcessing) {
+        busy = isProcessing;
+        submitButton.disabled = isProcessing;
+        submitButton.textContent = isProcessing ? "Processing..." : "Translate Video";
+        if (!isProcessing) updateSubmitState();
+      }
+
+      function resetDownloads() {
+        downloadSection.classList.add("hidden");
+        warning.classList.add("hidden");
+        warning.textContent = "";
+      }
+
+      async function readJson(response) {
+        const text = await response.text();
+        return text ? JSON.parse(text) : {};
+      }
+
+      function apiError(payload, fallback) {
+        return payload.detail || payload.error || fallback;
+      }
+
+      function updateSubmitState() {
+        const sameLanguage = sourceLanguage.value === targetLanguage.value;
+        submitButton.disabled = busy || sameLanguage;
+        if (sameLanguage) {
+          message.textContent = "Choose different source and target languages.";
+        } else if (statusLabel.textContent === "Ready") {
+          message.textContent = "Choose a video to begin.";
+        }
+      }
+    </script>
+  </body>
+</html>

@@ -5,6 +5,7 @@ from .utils import atempo_filter_chain, probe_duration, run_command
 
 DEFAULT_SAMPLE_RATE = 24000
 MAX_ATEMPO_RATIO = 4.0
+MAX_NATURAL_SPEEDUP = 1.65
 MIN_ATEMPO_RATIO = 0.25
 
 
@@ -29,21 +30,35 @@ def create_silence(folder, index, duration, sample_rate=DEFAULT_SAMPLE_RATE):
     return output_path
 
 
-def fit_audio_to_duration(input_path, output_path, target_duration, segment_index, sample_rate=DEFAULT_SAMPLE_RATE):
+def fit_audio_to_duration(
+    input_path,
+    output_path,
+    target_duration,
+    segment_index,
+    sample_rate=DEFAULT_SAMPLE_RATE,
+    max_speedup=MAX_NATURAL_SPEEDUP,
+):
     generated_duration = max(0.05, probe_duration(input_path))
     target_duration = max(0.25, float(target_duration))
-    ratio = generated_duration / target_duration
+    requested_ratio = generated_duration / target_duration
+    ratio = requested_ratio
     warning = ""
 
-    if ratio > MAX_ATEMPO_RATIO:
+    if ratio > max_speedup:
         warning = (
-            f"Segment {segment_index} timing ratio {ratio:.2f} was above {MAX_ATEMPO_RATIO:.2f}; "
+            f"Segment {segment_index} needed {requested_ratio:.2f}x speed-up; "
+            f"limited to {max_speedup:.2f}x to keep speech understandable."
+        )
+        ratio = max_speedup
+    elif ratio > MAX_ATEMPO_RATIO:
+        warning = (
+            f"Segment {segment_index} timing ratio {requested_ratio:.2f} was above {MAX_ATEMPO_RATIO:.2f}; "
             "used the closest supported atempo chain."
         )
         ratio = MAX_ATEMPO_RATIO
     elif ratio < MIN_ATEMPO_RATIO:
         warning = (
-            f"Segment {segment_index} timing ratio {ratio:.2f} was below {MIN_ATEMPO_RATIO:.2f}; "
+            f"Segment {segment_index} timing ratio {requested_ratio:.2f} was below {MIN_ATEMPO_RATIO:.2f}; "
             "used the closest supported atempo chain."
         )
         ratio = MIN_ATEMPO_RATIO
@@ -65,4 +80,5 @@ def fit_audio_to_duration(input_path, output_path, target_duration, segment_inde
             str(output_path),
         ]
     )
-    return warning
+    actual_duration = generated_duration / ratio
+    return warning, actual_duration

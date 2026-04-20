@@ -178,7 +178,7 @@ def process_job(job_id, file_id, video_path, source_language, target_language):
             )
 
         update_job(job_id, step="Generating dubbed audio", progress=72, message="Selecting the local TTS engine and timing dubbed speech.")
-        dubbed_audio_path, tts_warning = synthesize_dubbed_audio(
+        dubbed_audio_path, tts_warning, dubbed_segments = synthesize_dubbed_audio(
             translated_segments,
             target_language,
             work_dir,
@@ -189,7 +189,7 @@ def process_job(job_id, file_id, video_path, source_language, target_language):
             warnings.append(tts_warning)
 
         subtitle_path = work_dir / "translated_subtitles.srt"
-        write_srt(translated_segments, subtitle_path)
+        write_srt(dubbed_segments or translated_segments, subtitle_path)
 
         update_job(
             job_id,

@@ -102,7 +102,8 @@ def build_prompt(source_language, target_language, strict=False):
         + "  original_text: string,\n"
         + "  translated_text: string\n"
         + "}\n"
-        + "Use timestamps relative to the beginning of this audio chunk."
+        + "Use timestamps relative to the beginning of this audio chunk.\n"
+        + "Keep translated_text concise, natural, and suitable for dubbing at a normal speaking pace."
     )
 
 

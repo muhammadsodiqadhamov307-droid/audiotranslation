@@ -6,8 +6,12 @@ $ffmpegBin = Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Packages\Gyan.FFmpeg_
 $stdoutLog = Join-Path $projectRoot "uvicorn.out.log"
 $stderrLog = Join-Path $projectRoot "uvicorn.err.log"
 
-if (Test-Path $ffmpegBin) {
-    $env:Path = "$ffmpegBin;$env:Path"
+try {
+    if (Test-Path -LiteralPath $ffmpegBin -ErrorAction Stop) {
+        $env:Path = "$ffmpegBin;$env:Path"
+    }
+} catch {
+    # Fall back to the existing PATH when the package directory is not accessible.
 }
 
 Start-Process `

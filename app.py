@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import shutil
 import threading
 import time
@@ -12,7 +13,6 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
-from werkzeug.utils import secure_filename
 
 from pipeline.chunk_audio import chunk_audio
 from pipeline.extract_audio import extract_audio
@@ -79,6 +79,12 @@ def public_job(job_id):
 
 def allowed_video(filename):
     return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
+
+
+def secure_filename(filename):
+    name = Path(filename).name.strip().replace(" ", "_")
+    name = re.sub(r"[^A-Za-z0-9_.-]", "", name)
+    return name.strip("._") or "upload"
 
 
 def cleanup_upload(file_id):
@@ -162,12 +168,22 @@ def process_job(job_id, file_id, video_path, source_language, target_language):
             details = f" Details: {' '.join(gemini_warnings)}" if gemini_warnings else ""
             raise RuntimeError(f"Gemini returned no transcript. Check the source language and audio track.{details}")
 
-        update_job(job_id, step="Generating dubbed audio", progress=72, message="Generating and timing dubbed speech with Gemini TTS.")
+        def tts_progress(current, total):
+            progress = 72 + int((current / max(total, 1)) * 14)
+            update_job(
+                job_id,
+                step="Generating dubbed audio",
+                progress=progress,
+                message=f"Generating dubbed audio segment {current} of {total} with Kokoro.",
+            )
+
+        update_job(job_id, step="Generating dubbed audio", progress=72, message="Generating and timing dubbed speech with Kokoro.")
         dubbed_audio_path, tts_warning = synthesize_dubbed_audio(
             translated_segments,
             target_language,
             work_dir,
             total_duration=video_duration,
+            progress_callback=tts_progress,
         )
         if tts_warning:
             warnings.append(tts_warning)

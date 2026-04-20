@@ -3,4 +3,6 @@ fastapi
 uvicorn
 python-multipart
 python-dotenv
-Werkzeug
+kokoro
+soundfile
+numpy

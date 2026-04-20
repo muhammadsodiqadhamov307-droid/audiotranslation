@@ -27,15 +27,3 @@ def transcription_models():
         "gemini-2.0-flash-lite",
         "gemini-3.1-flash-lite-preview",
     ]
-
-
-def tts_model():
-    return os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
-
-
-def tts_request_interval_seconds():
-    return float(os.getenv("GEMINI_TTS_REQUEST_INTERVAL_SECONDS", "7.0"))
-
-
-def tts_max_retries():
-    return int(os.getenv("GEMINI_TTS_MAX_RETRIES", "6"))

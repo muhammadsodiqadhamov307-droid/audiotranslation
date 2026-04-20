@@ -1,42 +1,55 @@
-import base64
-import re
-import threading
+import os
 import time
-import wave
 from pathlib import Path
 
-from google.genai import types
+import numpy as np
+import soundfile as sf
 
-from .gemini_client import gemini_client, tts_max_retries, tts_model, tts_request_interval_seconds
 from .utils import atempo_filter_chain, concat_file_line, probe_duration, run_command
 
 
-DEFAULT_VOICE = "Kore"
-UZBEK_FALLBACK_VOICE = "Charon"
-WAV_RATE = 24000
-WAV_CHANNELS = 1
-WAV_SAMPLE_WIDTH = 2
-MAX_SPEECH_SPEEDUP = 1.35
+SAMPLE_RATE = 24000
+MAX_ATEMPO_RATIO = 4.0
+MIN_ATEMPO_RATIO = 0.25
 
-_tts_rate_lock = threading.Lock()
-_last_tts_request_at = 0.0
+VOICE_MAP = {
+    "en": ("a", "af_heart"),
+    "ru": ("r", "rf_voice"),
+    "uz": ("r", "rf_voice"),
+}
+KOKORO_SAFE_FALLBACK = ("a", "af_heart")
 
 
-def synthesize_dubbed_audio(segments, target_language, work_dir, voice_name=None, total_duration=None):
-    client = gemini_client()
+def synthesize_dubbed_audio(
+    segments,
+    target_language,
+    work_dir,
+    voice_name=None,
+    total_duration=None,
+    progress_callback=None,
+):
     work_dir = Path(work_dir)
     tts_dir = work_dir / "tts_segments"
     tts_dir.mkdir(parents=True, exist_ok=True)
     timeline_files = []
-    warning = ""
+    warnings = []
     cursor = 0.0
+    pipeline, voice, pipeline_warning = kokoro_pipeline_for(target_language, voice_name)
+    if pipeline_warning:
+        warnings.append(pipeline_warning)
 
+    if target_language == "uz":
+        warnings.append("Uzbek voice uses Russian phonetics as the closest available Kokoro voice.")
+
+    total_segments = len(segments)
     for index, segment in enumerate(segments, start=1):
+        if progress_callback:
+            progress_callback(index, total_segments)
+
         start = max(0.0, float(segment["start_sec"]))
         end = max(start + 0.25, float(segment["end_sec"]))
-        text = segment.get("translated_text") or segment.get("text") or ""
-        if not text.strip():
-            continue
+        duration = end - start
+        text = segment.get("translated_text") or segment.get("text") or segment.get("original_text") or ""
 
         if start > cursor:
             timeline_files.append(create_silence(tts_dir, index, start - cursor))
@@ -44,24 +57,16 @@ def synthesize_dubbed_audio(segments, target_language, work_dir, voice_name=None
 
         raw_audio = tts_dir / f"segment_{index:04d}.wav"
         try:
-            synthesize_text_to_wav(client, text, raw_audio, voice_name or DEFAULT_VOICE)
-        except Exception:
-            if target_language != "uz":
-                raise
-            warning = (
-                "Gemini TTS does not currently list Uzbek as a supported TTS language. "
-                "This segment was retried with a neutral English voice, so pronunciation may be imperfect."
-            )
-            synthesize_text_to_wav(
-                client,
-                text,
-                raw_audio,
-                UZBEK_FALLBACK_VOICE,
-                prompt_prefix="Read this text aloud with a neutral English voice and approximate the pronunciation clearly: ",
-            )
+            synthesize_kokoro_segment(pipeline, text, voice, raw_audio)
+        except Exception as exc:
+            warnings.append(f"Kokoro failed for segment {index}; inserted silence. Error: {exc}")
+            raw_audio = create_silence(tts_dir, index, duration)
 
         fitted_audio = tts_dir / f"segment_{index:04d}_fit.wav"
-        fit_audio_to_duration(raw_audio, fitted_audio, end - start)
+        timing_warning = fit_audio_to_duration(raw_audio, fitted_audio, duration, index)
+        if timing_warning:
+            warnings.append(timing_warning)
+
         timeline_files.append(fitted_audio)
         cursor = max(end, cursor + probe_duration(fitted_audio))
 
@@ -85,97 +90,51 @@ def synthesize_dubbed_audio(segments, target_language, work_dir, voice_name=None
             "-i",
             str(concat_path),
             "-ar",
-            str(WAV_RATE),
+            str(SAMPLE_RATE),
             "-ac",
-            str(WAV_CHANNELS),
+            "1",
             "-c:a",
             "pcm_s16le",
             str(dubbed_audio),
         ]
     )
-    return dubbed_audio, warning
+    return dubbed_audio, "\n".join(warnings)
 
 
-def synthesize_text_to_wav(client, text, output_path, voice_name, prompt_prefix=""):
-    response = generate_tts_with_retry(client, (prompt_prefix + text)[:8000], voice_name)
-    pcm = extract_pcm_audio(response)
-    if not pcm:
-        raise RuntimeError("Gemini TTS returned no audio data.")
-    write_wave_file(output_path, pcm)
+def kokoro_pipeline_for(target_language, voice_name=None):
+    from kokoro import KPipeline
+
+    lang_code, default_voice = VOICE_MAP[target_language]
+    lang_code = os.getenv(f"KOKORO_{target_language.upper()}_LANG", lang_code)
+    voice = voice_name or os.getenv(f"KOKORO_{target_language.upper()}_VOICE", default_voice)
+    try:
+        return KPipeline(lang_code=lang_code, device="cpu"), voice, ""
+    except Exception as exc:
+        fallback_lang, fallback_voice = KOKORO_SAFE_FALLBACK
+        warning = (
+            f"Kokoro rejected lang_code={lang_code!r} voice={voice!r}; "
+            f"using fallback lang_code={fallback_lang!r} voice={fallback_voice!r}. Error: {exc}"
+        )
+        return KPipeline(lang_code=fallback_lang, device="cpu"), fallback_voice, warning
 
 
-def generate_tts_with_retry(client, text, voice_name):
-    last_error = None
-    for attempt in range(tts_max_retries() + 1):
-        try:
-            wait_for_tts_rate_slot()
-            return client.models.generate_content(
-                model=tts_model(),
-                contents=text,
-                config=types.GenerateContentConfig(
-                    response_modalities=["AUDIO"],
-                    speech_config=types.SpeechConfig(
-                        voice_config=types.VoiceConfig(
-                            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
-                        )
-                    ),
-                ),
-            )
-        except Exception as exc:
-            last_error = exc
-            if not is_resource_exhausted(exc) or attempt >= tts_max_retries():
-                raise
-            time.sleep(retry_delay_seconds(exc, attempt))
-    raise last_error
+def synthesize_kokoro_segment(pipeline, text, voice, output_path):
+    clean_text = " ".join(str(text).split())
+    if not clean_text:
+        raise ValueError("Segment text was empty.")
 
+    samples = []
+    for _, _, audio in pipeline(clean_text, voice=voice, speed=1.0):
+        array = np.asarray(audio, dtype=np.float32)
+        if array.size:
+            samples.append(array)
 
-def wait_for_tts_rate_slot():
-    global _last_tts_request_at
-    interval = max(0.0, tts_request_interval_seconds())
-    with _tts_rate_lock:
-        elapsed = time.monotonic() - _last_tts_request_at
-        if elapsed < interval:
-            time.sleep(interval - elapsed)
-        _last_tts_request_at = time.monotonic()
+    if not samples:
+        raise RuntimeError("Kokoro returned no audio.")
 
-
-def is_resource_exhausted(exc):
-    text = str(exc).lower()
-    return "429" in text or "resource_exhausted" in text or "resource exhausted" in text
-
-
-def retry_delay_seconds(exc, attempt):
-    text = str(exc)
-    patterns = [
-        r"retryDelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)s",
-        r"retry in (\d+(?:\.\d+)?)s",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            return max(1.0, float(match.group(1)) + 1.0)
-    return min(60.0, 8.0 * (attempt + 1))
-
-
-def extract_pcm_audio(response):
-    for candidate in response.candidates or []:
-        content = getattr(candidate, "content", None)
-        for part in getattr(content, "parts", []) or []:
-            inline_data = getattr(part, "inline_data", None)
-            data = getattr(inline_data, "data", None)
-            if isinstance(data, bytes):
-                return data
-            if isinstance(data, str):
-                return base64.b64decode(data)
-    return b""
-
-
-def write_wave_file(path, pcm):
-    with wave.open(str(path), "wb") as wav_file:
-        wav_file.setnchannels(WAV_CHANNELS)
-        wav_file.setsampwidth(WAV_SAMPLE_WIDTH)
-        wav_file.setframerate(WAV_RATE)
-        wav_file.writeframes(pcm)
+    audio_array = np.concatenate(samples)
+    sf.write(str(output_path), audio_array, SAMPLE_RATE)
+    return output_path
 
 
 def create_silence(folder, index, duration):
@@ -188,7 +147,7 @@ def create_silence(folder, index, duration):
             "-f",
             "lavfi",
             "-i",
-            f"anullsrc=r={WAV_RATE}:cl=mono",
+            f"anullsrc=r={SAMPLE_RATE}:cl=mono",
             "-t",
             f"{duration:.3f}",
             "-c:a",
@@ -199,12 +158,25 @@ def create_silence(folder, index, duration):
     return output_path
 
 
-def fit_audio_to_duration(input_path, output_path, target_duration):
-    input_duration = probe_duration(input_path)
+def fit_audio_to_duration(input_path, output_path, target_duration, segment_index):
+    generated_duration = max(0.05, probe_duration(input_path))
     target_duration = max(0.25, float(target_duration))
-    target_duration = max(target_duration, input_duration / MAX_SPEECH_SPEEDUP)
-    tempo = input_duration / target_duration if target_duration else 1.0
-    filters = atempo_filter_chain(tempo)
+    ratio = generated_duration / target_duration
+    warning = ""
+
+    if ratio > MAX_ATEMPO_RATIO:
+        warning = (
+            f"Segment {segment_index} timing ratio {ratio:.2f} was above {MAX_ATEMPO_RATIO:.2f}; "
+            "used the closest supported atempo chain."
+        )
+        ratio = MAX_ATEMPO_RATIO
+    elif ratio < MIN_ATEMPO_RATIO:
+        warning = (
+            f"Segment {segment_index} timing ratio {ratio:.2f} was below {MIN_ATEMPO_RATIO:.2f}; "
+            "used the closest supported atempo chain."
+        )
+        ratio = MIN_ATEMPO_RATIO
+
     run_command(
         [
             "ffmpeg",
@@ -212,13 +184,14 @@ def fit_audio_to_duration(input_path, output_path, target_duration):
             "-i",
             str(input_path),
             "-filter:a",
-            filters,
+            atempo_filter_chain(ratio),
             "-ar",
-            str(WAV_RATE),
+            str(SAMPLE_RATE),
             "-ac",
-            str(WAV_CHANNELS),
+            "1",
             "-c:a",
             "pcm_s16le",
             str(output_path),
         ]
     )
+    return warning

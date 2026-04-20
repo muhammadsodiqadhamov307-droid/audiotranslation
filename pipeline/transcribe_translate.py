@@ -93,7 +93,7 @@ def build_prompt(source_language, target_language, strict=False):
         strict_note
         + f"Transcribe this audio in {source_name}. "
         + "Return a JSON array where each element has start_sec as a float, "
-        + "end_sec as a float, text as a string, and translated_text as a string. "
+        + "end_sec as a float, original_text as a string, and translated_text as a string. "
         + f"Translate each text segment into {target_name}. "
         + "Use timestamps relative to the beginning of this audio chunk. "
         + "Keep segments short enough for subtitles: split long speech into multiple segments, "
@@ -129,9 +129,9 @@ def normalize_segment(segment, chunk: AudioChunk):
     except (KeyError, TypeError, ValueError):
         return None
 
-    text = str(segment.get("text", "")).strip()
+    original_text = str(segment.get("original_text") or segment.get("text") or "").strip()
     translated_text = str(segment.get("translated_text", "")).strip()
-    if not text and not translated_text:
+    if not original_text and not translated_text:
         return None
 
     if end <= start:
@@ -141,17 +141,25 @@ def normalize_segment(segment, chunk: AudioChunk):
         "chunk_index": chunk.index,
         "start_sec": round(start, 3),
         "end_sec": round(end, 3),
-        "text": text,
-        "translated_text": translated_text or text,
+        "original_text": original_text,
+        "translated_text": translated_text or original_text,
     }
 
 
 def deduplicate_overlap_segments(segments):
     deduped = []
-    for segment in sorted(segments, key=lambda item: (item["start_sec"], item["chunk_index"])):
-        overlap_boundary = segment["chunk_index"] * 55 + OVERLAP_SECONDS
-        if segment["chunk_index"] > 0 and segment["start_sec"] < overlap_boundary:
-            continue
-        segment.pop("chunk_index", None)
-        deduped.append(segment)
+    previous_chunk_last_end = None
+    for chunk_index in sorted({segment["chunk_index"] for segment in segments}):
+        chunk_segments = sorted(
+            [segment for segment in segments if segment["chunk_index"] == chunk_index],
+            key=lambda item: item["start_sec"],
+        )
+        current_chunk_last_end = max((segment["end_sec"] for segment in chunk_segments), default=0.0)
+        for segment in chunk_segments:
+            if previous_chunk_last_end is not None and segment["start_sec"] < previous_chunk_last_end - OVERLAP_SECONDS:
+                continue
+            segment.pop("chunk_index", None)
+            deduped.append(segment)
+        previous_chunk_last_end = current_chunk_last_end
+    deduped.sort(key=lambda item: item["start_sec"])
     return deduped

@@ -149,17 +149,19 @@ def normalize_segment(segment, chunk: AudioChunk):
 def deduplicate_overlap_segments(segments):
     deduped = []
     previous_chunk_last_end = None
-    for chunk_index in sorted({segment["chunk_index"] for segment in segments}):
+    chunk_indexes = sorted({segment.get("chunk_index") for segment in segments if "chunk_index" in segment})
+    for chunk_index in chunk_indexes:
         chunk_segments = sorted(
-            [segment for segment in segments if segment["chunk_index"] == chunk_index],
+            [segment for segment in segments if segment.get("chunk_index") == chunk_index],
             key=lambda item: item["start_sec"],
         )
         current_chunk_last_end = max((segment["end_sec"] for segment in chunk_segments), default=0.0)
         for segment in chunk_segments:
             if previous_chunk_last_end is not None and segment["start_sec"] < previous_chunk_last_end - OVERLAP_SECONDS:
                 continue
-            segment.pop("chunk_index", None)
-            deduped.append(segment)
+            clean_segment = dict(segment)
+            clean_segment.pop("chunk_index", None)
+            deduped.append(clean_segment)
         previous_chunk_last_end = current_chunk_last_end
     deduped.sort(key=lambda item: item["start_sec"])
     return deduped

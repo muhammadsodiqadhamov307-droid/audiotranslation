@@ -49,9 +49,10 @@ KOKORO_RU_VOICE=rf_voice
 SAYRO_MODEL=uzlm/sayro-tts-1.7B
 SAYRO_DEVICE=cpu
 MMS_UZ_MODEL=facebook/mms-tts-uzb-script_cyrillic
+HF_TOKEN=your_huggingface_token_here
 ```
 
-Sayro is large and may require Hugging Face access approval. If it cannot load, the app falls back to MMS.
+Sayro is large and may require Hugging Face access approval. If it cannot load, the app falls back to MMS. The MMS fallback model is Cyrillic-only, so the app converts Uzbek Latin text to Uzbek Cyrillic before synthesis.
 
 ## 5. Runtime Directories
 

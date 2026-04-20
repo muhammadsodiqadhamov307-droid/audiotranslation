@@ -67,6 +67,8 @@ pip install -r requirements.txt
 
 The first Uzbek run downloads the Sayro and MMS models from Hugging Face into the normal Hugging Face cache. Sayro is a large model and may require accepting the model terms on Hugging Face before it can download.
 
+For Sayro, accept access on Hugging Face and either run `huggingface-cli login` or add an `HF_TOKEN` value to `.env`. Without that access, the app automatically uses the MMS fallback.
+
 ## FFmpeg
 
 Windows:
@@ -104,6 +106,18 @@ Open:
 
 ```text
 http://localhost:8000
+```
+
+To run without a visible Python console window on Windows:
+
+```powershell
+.\start_server_hidden.ps1
+```
+
+To stop the background server:
+
+```powershell
+.\stop_server.ps1
 ```
 
 ## Models And Voices
@@ -144,6 +158,8 @@ MMS_UZ_MODEL=facebook/mms-tts-uzb-script_cyrillic
 ```
 
 If Sayro fails, is unavailable, or cannot be downloaded, the app automatically uses Meta MMS for Uzbek and shows a warning in the UI. If MMS also fails for a segment, the app inserts silence for that segment and keeps the job moving.
+
+The MMS fallback model is Cyrillic-only. The app converts Uzbek Latin text to Uzbek Cyrillic before sending text to MMS.
 
 ## Pipeline
 

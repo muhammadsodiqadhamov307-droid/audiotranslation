@@ -65,7 +65,7 @@ class SayroEngine:
         except Exception as exc:
             self.used_mms_fallback = True
             sample_rate, warning = self.fallback_engine.synthesize(clean_text, output_path)
-            details = f"Sayro TTS unavailable - used Meta MMS fallback for Uzbek voice. Error: {exc}"
+            details = f"Sayro TTS unavailable - used Meta MMS fallback for Uzbek voice. {summarize_sayro_error(exc)}"
             if warning:
                 details = f"{details}\n{warning}"
             return sample_rate, details
@@ -79,3 +79,15 @@ def clean_uzbek(text):
         return clean_uzbek_text(clean_text)
     except Exception:
         return clean_text
+
+
+def summarize_sayro_error(exc):
+    text = str(exc)
+    lowered = text.lower()
+    if "gated repo" in lowered or "401" in lowered or "restricted" in lowered:
+        return (
+            "Hugging Face access to uzlm/sayro-tts-1.7B is gated. "
+            "Accept the model terms and login with a Hugging Face token to use Sayro."
+        )
+    first_line = text.splitlines()[0].strip()
+    return f"Error: {first_line}" if first_line else "The primary model could not be loaded."

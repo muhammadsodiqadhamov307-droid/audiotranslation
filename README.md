@@ -1,12 +1,17 @@
-# Gemini, Kokoro, Sayro Video Translation And Dubbing
+# Video Translation Studio
 
-A local FastAPI web app that uploads a video, transcribes and translates speech with Gemini, generates dubbed speech locally, and returns:
+Video Translation Studio is a local FastAPI app that uploads a video, transcribes and translates speech with Gemini, generates dubbed audio locally, and returns:
 
-- A dubbed `.mp4`
-- A downloadable translated `.srt`
-- The `.srt` embedded in the MP4 as a soft subtitle track
+- a dubbed `.mp4`
+- a downloadable translated `.srt`
+- the subtitle track embedded into the MP4 as `mov_text`
 
-Everything is local except the Gemini transcription and translation calls. There is no Google Cloud project, no Cloud Storage, and no Gemini TTS quota.
+It now behaves more like a real Windows app:
+
+- persistent settings UI for `GEMINI_API_KEY`, `HF_TOKEN`, and model choices
+- selectable Uzbek TTS mode
+- hidden background launcher
+- Windows packaging script for building an `.exe`
 
 ## Stack
 
@@ -14,36 +19,37 @@ Everything is local except the Gemini transcription and translation calls. There
 - Frontend: single-page HTML/CSS/JS
 - Transcription + translation: `google-genai` with Gemini Flash models
 - English/Russian TTS: Kokoro local CPU TTS
-- Uzbek TTS primary: Sayro `uzlm/sayro-tts-1.7B`
-- Uzbek TTS fallback: Meta MMS `facebook/mms-tts-uzb-script_cyrillic`
+- Uzbek TTS:
+  - `mms` mode: Meta MMS only
+  - `auto` mode: Sayro first, then MMS fallback
+  - `sayro` mode: Sayro only
 - Media processing: FFmpeg and FFprobe
-- Credentials: `GEMINI_API_KEY` in `.env`
 
-## Project Structure
+## Settings
+
+The app stores persistent settings in:
 
 ```text
-project/
-|-- app.py
-|-- pipeline/
-|   |-- extract_audio.py
-|   |-- chunk_audio.py
-|   |-- transcribe_translate.py
-|   |-- tts_router.py
-|   |-- tts_kokoro.py
-|   |-- tts_sayro.py
-|   |-- tts_mms.py
-|   |-- timing.py
-|   |-- subtitles.py
-|   `-- merge_video.py
-|-- static/
-|   |-- index.html
-|   `-- style.css
-|-- uploads/
-|-- outputs/
-|-- requirements.txt
-|-- .env.example
-`-- README.md
+%APPDATA%\VideoTranslationStudio\settings.json
 ```
+
+The settings screen in the app lets you save:
+
+- `GEMINI_API_KEY`
+- `HF_TOKEN`
+- Gemini model order
+- Uzbek TTS mode
+- Sayro device
+
+Secrets are not echoed back into the UI. The app only reports whether a key or token is already saved.
+
+## Uzbek TTS Modes
+
+- `Fast Uzbek (MMS)`: best choice for older Windows PCs
+- `Hybrid Uzbek (Sayro then MMS)`: uses Sayro when possible and falls back automatically
+- `Sayro Only`: highest ambition, but slow on weaker hardware
+
+For an older machine, keep Uzbek mode on `mms`.
 
 ## Setup
 
@@ -53,21 +59,19 @@ Get a Gemini API key:
 https://aistudio.google.com/apikey
 ```
 
-Copy `.env.example` to `.env` and set:
+If you want Sayro, request access at:
 
-```env
-GEMINI_API_KEY=your_key_here
+```text
+https://huggingface.co/uzlm/sayro-tts-1.7B
 ```
+
+Then create `.env` from `.env.example` if you want file-based defaults, or just enter the keys in the app settings UI.
 
 Install dependencies:
 
 ```powershell
 pip install -r requirements.txt
 ```
-
-The first Uzbek run downloads the Sayro and MMS models from Hugging Face into the normal Hugging Face cache. Sayro is a large model and may require accepting the model terms on Hugging Face before it can download.
-
-For Sayro, accept access on Hugging Face and either run `huggingface-cli login` or add an `HF_TOKEN` value to `.env`. Without that access, the app automatically uses the MMS fallback.
 
 ## FFmpeg
 
@@ -96,128 +100,61 @@ ffmpeg -version
 ffprobe -version
 ```
 
-## Run
+## Run From Source
+
+Standard dev server:
 
 ```powershell
 uvicorn app:app --reload --port 8000
 ```
 
-Open:
-
-```text
-http://localhost:8000
-```
-
-To run without a visible Python console window on Windows:
+Hidden Windows launcher:
 
 ```powershell
 .\start_server_hidden.ps1
 ```
 
-To stop the background server:
+Stop it with:
 
 ```powershell
 .\stop_server.ps1
 ```
 
-## Models And Voices
-
-Gemini transcription/translation fallback chain:
-
-```env
-GEMINI_TRANSCRIBE_MODELS=gemini-2.0-flash,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash-lite
-```
-
-TTS routing:
+Open:
 
 ```text
-English -> Kokoro, lang a, voice af_heart
-Russian -> Kokoro, lang r, voice rf_voice
-Uzbek  -> Sayro uzlm/sayro-tts-1.7B
-Uzbek fallback -> facebook/mms-tts-uzb-script_cyrillic
+http://127.0.0.1:8000
 ```
 
-References:
+## Build A Windows App
+
+Install build dependency:
+
+```powershell
+pip install -r requirements-build.txt
+```
+
+Then build:
+
+```powershell
+.\build_windows_app.ps1
+```
+
+This creates:
 
 ```text
-Kokoro voices: https://huggingface.co/hexgrad/Kokoro-82M
-Sayro TTS:     https://huggingface.co/uzlm/sayro-tts-1.7B
-MMS fallback:  https://huggingface.co/facebook/mms-tts-uzb-script_cyrillic
+dist\VideoTranslationStudio\VideoTranslationStudio.exe
 ```
 
-Optional overrides:
+The packaged app launches a local server and opens the browser automatically.
 
-```env
-KOKORO_EN_LANG=a
-KOKORO_EN_VOICE=af_heart
-KOKORO_RU_LANG=r
-KOKORO_RU_VOICE=rf_voice
-SAYRO_MODEL=uzlm/sayro-tts-1.7B
-SAYRO_DEVICE=cpu
-MMS_UZ_MODEL=facebook/mms-tts-uzb-script_cyrillic
-```
+## Runtime Data
 
-If Sayro fails, is unavailable, or cannot be downloaded, the app automatically uses Meta MMS for Uzbek and shows a warning in the UI. If MMS also fails for a segment, the app inserts silence for that segment and keeps the job moving.
+Uploads, outputs, and settings are stored in the user app-data folder, not in the install directory. That makes the packaged app easier to move to another Windows PC.
 
-The MMS fallback model is Cyrillic-only. The app converts Uzbek Latin text to Uzbek Cyrillic before sending text to MMS.
+## Notes
 
-## Pipeline
-
-1. Browser uploads the video in 8 MB chunks.
-2. FFmpeg extracts audio:
-
-```bash
-ffmpeg -i input_video -q:a 0 -map a full_audio.mp3
-```
-
-3. FFmpeg creates overlapping 55-second MP3 chunks.
-4. Each chunk is uploaded with Gemini Files API:
-
-```python
-myfile = client.files.upload(file="chunk_000.mp3")
-```
-
-5. Gemini returns JSON:
-
-```json
-[
-  {
-    "start_sec": 0.5,
-    "end_sec": 2.0,
-    "original_text": "Original speech",
-    "translated_text": "Translated speech"
-  }
-]
-```
-
-6. The app offsets chunk timestamps by `chunk_index * 55`.
-7. The app deduplicates overlap using the previous chunk's last end time minus 2 seconds.
-8. The TTS router selects Kokoro for English/Russian or Sayro/MMS for Uzbek.
-9. FFmpeg applies chained `atempo` filters to match segment timing.
-10. FFmpeg concatenates timed WAV files and silence gaps into `dubbed_audio.wav`.
-11. The app writes `translated_subtitles.srt`.
-12. FFmpeg merges original video, dubbed audio, and subtitles:
-
-```bash
-ffmpeg -i original_video \
-       -i dubbed_audio.wav \
-       -i subtitles.srt \
-       -map 0:v \
-       -map 1:a \
-       -map 2 \
-       -c:v copy \
-       -c:a aac \
-       -c:s mov_text \
-       -metadata:s:s:0 language=<target_lang_code> \
-       output.mp4
-```
-
-## Error Handling
-
-- Source and target languages cannot be the same.
-- Invalid Gemini JSON is retried once with a stricter prompt.
-- Failed Gemini chunks are skipped with warnings.
-- Sayro failures automatically fall back to MMS.
-- MMS failures insert same-duration silence.
-- Extreme `atempo` ratios are clamped and surfaced as warnings.
-- Uploads and intermediate files are deleted after completion or failure.
+- Sayro is large and slow on older CPUs.
+- MMS is the practical default on weak hardware.
+- The first Sayro run on a stronger PC may still take time while the model warms up.
+- The MMS Uzbek model expects Cyrillic, so the app converts Uzbek Latin text before synthesis.

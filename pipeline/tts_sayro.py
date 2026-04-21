@@ -2,6 +2,7 @@ import os
 
 import numpy as np
 import soundfile as sf
+from settings_store import apply_runtime_settings
 
 from .tts_mms import MMSEngine
 
@@ -11,9 +12,11 @@ class SayroEngine:
         self,
         primary="uzlm/sayro-tts-1.7B",
         fallback="facebook/mms-tts-uzb-script_cyrillic",
+        allow_fallback=True,
     ):
         self.primary = primary
         self.fallback = fallback
+        self.allow_fallback = allow_fallback
         self.model = None
         self.fallback_engine = MMSEngine(fallback)
         self._load_error = None
@@ -30,10 +33,15 @@ class SayroEngine:
             raise self._load_error
 
         try:
+            apply_runtime_settings()
             import torch
             from qwen_tts.inference.qwen3_tts_model import Qwen3TTSModel
 
-            device = os.getenv("SAYRO_DEVICE", "cuda:0" if torch.cuda.is_available() else "cpu")
+            configured_device = os.getenv("SAYRO_DEVICE", "auto").lower()
+            if configured_device == "auto":
+                device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            else:
+                device = configured_device
             dtype = torch.bfloat16
             self.torch = torch
             self.model = Qwen3TTSModel.from_pretrained(
@@ -63,6 +71,8 @@ class SayroEngine:
             sf.write(str(output_path), audio, rate)
             return rate, ""
         except Exception as exc:
+            if not self.allow_fallback:
+                raise RuntimeError(summarize_sayro_error(exc)) from exc
             self.used_mms_fallback = True
             sample_rate, warning = self.fallback_engine.synthesize(clean_text, output_path)
             details = f"Sayro TTS unavailable - used Meta MMS fallback for Uzbek voice. {summarize_sayro_error(exc)}"

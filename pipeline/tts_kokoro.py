@@ -2,6 +2,7 @@ import os
 
 import numpy as np
 import soundfile as sf
+from settings_store import apply_runtime_settings
 
 
 KOKORO_SAMPLE_RATE = 24000
@@ -24,6 +25,7 @@ class KokoroEngine:
             return
 
         from kokoro import KPipeline
+        apply_runtime_settings()
 
         lang = os.getenv(f"KOKORO_{self.lang_env_prefix}_LANG", self.lang)
         voice = os.getenv(f"KOKORO_{self.lang_env_prefix}_VOICE", self.voice)

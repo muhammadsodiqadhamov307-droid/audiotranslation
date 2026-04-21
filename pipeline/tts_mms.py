@@ -10,7 +10,7 @@ class MMSEngine:
 
     @property
     def label(self):
-        return "Meta MMS"
+        return "Meta MMS Uzbek TTS"
 
     def load(self):
         if self.model is not None and self.tokenizer is not None:

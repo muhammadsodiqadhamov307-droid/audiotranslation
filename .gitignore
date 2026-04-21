@@ -32,3 +32,8 @@ uvicorn.err.log
 Thumbs.db
 .vscode/
 .idea/
+
+# Packaging
+build/
+dist/
+*.spec

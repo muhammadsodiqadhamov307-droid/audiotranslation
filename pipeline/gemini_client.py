@@ -1,11 +1,11 @@
 import os
 
-from dotenv import load_dotenv
 from google import genai
+from settings_store import apply_runtime_settings
 
 
 def gemini_client():
-    load_dotenv(override=True)
+    apply_runtime_settings()
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is missing. Add it to your .env file.")

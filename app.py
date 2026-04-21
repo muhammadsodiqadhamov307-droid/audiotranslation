@@ -21,15 +21,17 @@ from pipeline.subtitles import write_srt
 from pipeline.tts_router import synthesize_dubbed_audio
 from pipeline.transcribe_translate import transcribe_translate_chunks
 from pipeline.utils import ensure_ffmpeg, probe_duration, safe_unlink
+from settings_store import apply_runtime_settings, public_settings, resource_dir, runtime_media_dir, save_settings, settings_file, user_data_dir
 
 
 load_dotenv(override=True)
+apply_runtime_settings()
 
 logger = logging.getLogger("video_dubbing")
 
-BASE_DIR = Path(__file__).resolve().parent
-UPLOAD_DIR = BASE_DIR / "uploads"
-OUTPUT_DIR = BASE_DIR / "outputs"
+BASE_DIR = resource_dir()
+UPLOAD_DIR = runtime_media_dir("uploads")
+OUTPUT_DIR = runtime_media_dir("outputs")
 CHUNK_DIR = UPLOAD_DIR / "chunks"
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv"}
@@ -114,9 +116,13 @@ def cleanup_job_if_finished(job_id):
 
 
 def process_job(job_id, file_id, video_path, source_language, target_language):
+    apply_runtime_settings()
     work_dir = OUTPUT_DIR / job_id
     work_dir.mkdir(parents=True, exist_ok=True)
     warnings = []
+    tts_status = {"current": 0, "total": 0, "engine": ""}
+    tts_heartbeat_stop = threading.Event()
+    tts_heartbeat_thread = None
 
     try:
         update_job(
@@ -169,6 +175,9 @@ def process_job(job_id, file_id, video_path, source_language, target_language):
             raise RuntimeError(f"Gemini returned no transcript. Check the source language and audio track.{details}")
 
         def tts_progress(current, total, engine_label):
+            tts_status["current"] = current
+            tts_status["total"] = total
+            tts_status["engine"] = engine_label
             progress = 72 + int((current / max(total, 1)) * 14)
             update_job(
                 job_id,
@@ -178,6 +187,12 @@ def process_job(job_id, file_id, video_path, source_language, target_language):
             )
 
         update_job(job_id, step="Generating dubbed audio", progress=72, message="Selecting the local TTS engine and timing dubbed speech.")
+        tts_heartbeat_thread = threading.Thread(
+            target=tts_heartbeat,
+            args=(job_id, tts_status, tts_heartbeat_stop),
+            daemon=True,
+        )
+        tts_heartbeat_thread.start()
         dubbed_audio_path, tts_warning, dubbed_segments = synthesize_dubbed_audio(
             translated_segments,
             target_language,
@@ -185,6 +200,7 @@ def process_job(job_id, file_id, video_path, source_language, target_language):
             total_duration=video_duration,
             progress_callback=tts_progress,
         )
+        tts_heartbeat_stop.set()
         if tts_warning:
             warnings.append(tts_warning)
 
@@ -220,6 +236,7 @@ def process_job(job_id, file_id, video_path, source_language, target_language):
         )
     except Exception as exc:
         logger.exception("Job %s failed: %s", job_id, exc)
+        tts_heartbeat_stop.set()
         cleanup_upload(file_id)
         shutil.rmtree(work_dir, ignore_errors=True)
         update_job(
@@ -229,6 +246,28 @@ def process_job(job_id, file_id, video_path, source_language, target_language):
             progress=0,
             message=str(exc),
             warning="\n".join(warnings),
+        )
+    finally:
+        tts_heartbeat_stop.set()
+        if tts_heartbeat_thread and tts_heartbeat_thread.is_alive():
+            tts_heartbeat_thread.join(timeout=1)
+
+
+def tts_heartbeat(job_id, status, stop_event):
+    elapsed = 0
+    while not stop_event.wait(10):
+        elapsed += 10
+        current = status.get("current") or 1
+        total = status.get("total") or "?"
+        engine = status.get("engine") or "local TTS"
+        update_job(
+            job_id,
+            step="Generating dubbed audio",
+            progress=min(86, 72 + min(elapsed // 10, 12)),
+            message=(
+                f"Still generating dubbed audio with {engine}: segment {current} of {total}. "
+                "The first Sayro segment can take a while on CPU while the model warms up."
+            ),
         )
 
 
@@ -240,6 +279,30 @@ def index():
 @app.get("/api/languages")
 def languages():
     return {"languages": SUPPORTED_LANGUAGES}
+
+
+@app.get("/api/settings")
+def get_settings():
+    return {
+        "settings": public_settings(),
+        "app_data_dir": str(user_data_dir()),
+        "settings_file": str(settings_file()),
+    }
+
+
+@app.post("/api/settings")
+def update_settings(payload: dict):
+    valid_modes = {"mms", "auto", "sayro"}
+    mode = str(payload.get("uzbek_tts_mode") or "").strip().lower()
+    if mode and mode not in valid_modes:
+        raise HTTPException(status_code=400, detail="Invalid Uzbek TTS mode.")
+
+    device = str(payload.get("sayro_device") or "").strip().lower()
+    if device and device not in {"cpu", "cuda:0", "auto"}:
+        raise HTTPException(status_code=400, detail="Invalid Sayro device.")
+
+    saved = save_settings(payload)
+    return {"settings": saved, "app_data_dir": str(user_data_dir()), "settings_file": str(settings_file())}
 
 
 @app.post("/api/upload-chunk")

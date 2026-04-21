@@ -3,20 +3,27 @@ from pathlib import Path
 
 from .timing import DEFAULT_SAMPLE_RATE, create_silence, fit_audio_to_duration
 from .tts_kokoro import KokoroEngine
+from .tts_mms import MMSEngine
 from .tts_sayro import SayroEngine
 from .utils import concat_file_line, probe_duration, run_command
+from settings_store import apply_runtime_settings
 
 
 def get_tts_engine(target_language: str):
+    apply_runtime_settings()
     if target_language == "en":
         return KokoroEngine(lang="a", voice="af_heart")
     if target_language == "ru":
         return KokoroEngine(lang="r", voice="rf_voice")
     if target_language == "uz":
-        return SayroEngine(
-            primary=os.getenv("SAYRO_MODEL", "uzlm/sayro-tts-1.7B"),
-            fallback=os.getenv("MMS_UZ_MODEL", "facebook/mms-tts-uzb-script_cyrillic"),
-        )
+        mode = os.getenv("UZBEK_TTS_MODE", "mms").strip().lower()
+        sayro_model = os.getenv("SAYRO_MODEL", "uzlm/sayro-tts-1.7B")
+        mms_model = os.getenv("MMS_UZ_MODEL", "facebook/mms-tts-uzb-script_cyrillic")
+        if mode == "mms":
+            return MMSEngine(mms_model)
+        if mode == "sayro":
+            return SayroEngine(primary=sayro_model, fallback=mms_model, allow_fallback=False)
+        return SayroEngine(primary=sayro_model, fallback=mms_model, allow_fallback=True)
     raise ValueError(f"Unsupported target language for TTS: {target_language}")
 
 

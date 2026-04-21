@@ -13,7 +13,7 @@
           <div>
             <p class="eyebrow">Local video dubbing</p>
             <h1 id="page-title">Translate your video into a new voice.</h1>
-            <p class="lede">Upload a video, choose languages, and get an MP4 with dubbed audio plus a matching SRT subtitle file.</p>
+            <p class="lede">Upload a video, choose languages, save your API keys once, and get an MP4 with dubbed audio plus a matching SRT subtitle file.</p>
           </div>
           <img
             class="studio-image"
@@ -22,6 +22,63 @@
           />
         </div>
 
+        <section class="settings-panel" aria-labelledby="settings-title">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Settings</p>
+              <h2 id="settings-title">Connect your models and choose how Uzbek dubbing behaves.</h2>
+            </div>
+            <p id="settings-status" class="settings-status">Loading saved settings.</p>
+          </div>
+
+          <form id="settings-form" class="settings-form">
+            <div class="settings-grid">
+              <label>
+                <span>Gemini API Key</span>
+                <input id="gemini-api-key" type="password" placeholder="Paste only if you want to replace the saved key" />
+                <small id="gemini-api-key-status" class="field-note">Checking saved key.</small>
+              </label>
+
+              <label>
+                <span>Hugging Face Token</span>
+                <input id="hf-token" type="password" placeholder="Paste only if you want to replace the saved token" />
+                <small id="hf-token-status" class="field-note">Checking saved token.</small>
+              </label>
+
+              <label>
+                <span>Uzbek TTS Mode</span>
+                <select id="uzbek-tts-mode">
+                  <option value="mms">Fast Uzbek (MMS)</option>
+                  <option value="auto">Hybrid Uzbek (Sayro then MMS)</option>
+                  <option value="sayro">Sayro Only</option>
+                </select>
+                <small class="field-note">Use MMS on older PCs. Use Sayro on stronger hardware.</small>
+              </label>
+
+              <label>
+                <span>Sayro Device</span>
+                <select id="sayro-device">
+                  <option value="cpu">CPU</option>
+                  <option value="auto">Auto</option>
+                  <option value="cuda:0">CUDA GPU</option>
+                </select>
+                <small class="field-note">Leave this on CPU for this machine. Switch to CUDA on a capable NVIDIA PC.</small>
+              </label>
+            </div>
+
+            <label class="full-width">
+              <span>Gemini Model Order</span>
+              <input id="gemini-transcribe-models" type="text" />
+              <small class="field-note">Comma-separated fallback order for transcription and translation.</small>
+            </label>
+
+            <div class="settings-actions">
+              <button id="save-settings" type="submit">Save Settings</button>
+              <p id="settings-path" class="settings-path"></p>
+            </div>
+          </form>
+        </section>
+
         <form id="translate-form" class="controls">
           <label id="drop-zone" class="drop-zone" for="video-file">
             <input id="video-file" type="file" accept=".mp4,.mov,.avi,.mkv,video/*" />
@@ -29,7 +86,7 @@
             <span id="file-name" class="drop-copy">MP4, MOV, AVI, or MKV</span>
           </label>
 
-          <div class="field-grid">
+          <div class="field-grid three-up">
             <label>
               <span>Source Language</span>
               <select id="source-language">
@@ -47,6 +104,12 @@
                 <option value="uz">Uzbek</option>
               </select>
             </label>
+
+            <div class="mode-chip-block">
+              <span>Current Uzbek Mode</span>
+              <strong id="mode-chip" class="mode-chip">Fast Uzbek (MMS)</strong>
+              <small class="field-note">This applies when the target language is Uzbek.</small>
+            </div>
           </div>
 
           <button id="submit-button" type="submit">Translate Video</button>
@@ -84,12 +147,14 @@
     <script>
       const CHUNK_SIZE = 8 * 1024 * 1024;
       const form = document.querySelector("#translate-form");
+      const settingsForm = document.querySelector("#settings-form");
       const fileInput = document.querySelector("#video-file");
       const fileName = document.querySelector("#file-name");
       const dropZone = document.querySelector("#drop-zone");
       const sourceLanguage = document.querySelector("#source-language");
       const targetLanguage = document.querySelector("#target-language");
       const submitButton = document.querySelector("#submit-button");
+      const saveSettingsButton = document.querySelector("#save-settings");
       const statusLabel = document.querySelector("#status-label");
       const progressPercent = document.querySelector("#progress-percent");
       const progressBar = document.querySelector("#progress-bar");
@@ -99,7 +164,18 @@
       const videoDownload = document.querySelector("#video-download");
       const subtitleDownload = document.querySelector("#subtitle-download");
       const warning = document.querySelector("#warning");
+      const geminiApiKey = document.querySelector("#gemini-api-key");
+      const hfToken = document.querySelector("#hf-token");
+      const geminiModels = document.querySelector("#gemini-transcribe-models");
+      const uzbekTtsMode = document.querySelector("#uzbek-tts-mode");
+      const sayroDevice = document.querySelector("#sayro-device");
+      const settingsStatus = document.querySelector("#settings-status");
+      const settingsPath = document.querySelector("#settings-path");
+      const geminiApiKeyStatus = document.querySelector("#gemini-api-key-status");
+      const hfTokenStatus = document.querySelector("#hf-token-status");
+      const modeChip = document.querySelector("#mode-chip");
       let busy = false;
+      let settingsBusy = false;
 
       fileInput.addEventListener("change", () => {
         fileName.textContent = fileInput.files[0]?.name || "MP4, MOV, AVI, or MKV";
@@ -107,6 +183,7 @@
 
       sourceLanguage.addEventListener("change", updateSubmitState);
       targetLanguage.addEventListener("change", updateSubmitState);
+      uzbekTtsMode.addEventListener("change", updateModeChip);
 
       ["dragenter", "dragover"].forEach((eventName) => {
         dropZone.addEventListener(eventName, (event) => {
@@ -130,7 +207,38 @@
         }
       });
 
-      updateSubmitState();
+      settingsForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        settingsBusy = true;
+        saveSettingsButton.disabled = true;
+        settingsStatus.textContent = "Saving settings.";
+
+        try {
+          const response = await fetch("/api/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              gemini_api_key: geminiApiKey.value,
+              hf_token: hfToken.value,
+              gemini_transcribe_models: geminiModels.value,
+              uzbek_tts_mode: uzbekTtsMode.value,
+              sayro_device: sayroDevice.value,
+            }),
+          });
+          const payload = await readJson(response);
+          if (!response.ok) throw new Error(apiError(payload, "Could not save settings."));
+          applySettings(payload.settings, payload.settings_file);
+          geminiApiKey.value = "";
+          hfToken.value = "";
+          settingsStatus.textContent = "Settings saved.";
+        } catch (error) {
+          settingsStatus.textContent = error.message;
+        } finally {
+          settingsBusy = false;
+          saveSettingsButton.disabled = false;
+          updateSubmitState();
+        }
+      });
 
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -168,6 +276,28 @@
           setBusy(false);
         }
       });
+
+      async function loadSettings() {
+        try {
+          const response = await fetch("/api/settings");
+          const payload = await readJson(response);
+          if (!response.ok) throw new Error(apiError(payload, "Could not load settings."));
+          applySettings(payload.settings, payload.settings_file);
+          settingsStatus.textContent = "Saved settings loaded.";
+        } catch (error) {
+          settingsStatus.textContent = error.message;
+        }
+      }
+
+      function applySettings(settings, filePath) {
+        geminiModels.value = settings.gemini_transcribe_models || "";
+        uzbekTtsMode.value = settings.uzbek_tts_mode || "mms";
+        sayroDevice.value = settings.sayro_device || "cpu";
+        geminiApiKeyStatus.textContent = settings.gemini_api_key_set ? "A Gemini key is saved." : "No Gemini key saved yet.";
+        hfTokenStatus.textContent = settings.hf_token_set ? "A Hugging Face token is saved." : "No Hugging Face token saved yet.";
+        settingsPath.textContent = filePath ? `Stored in ${filePath}` : "";
+        updateModeChip();
+      }
 
       async function uploadFileInChunks(file) {
         const uploadId = crypto.randomUUID();
@@ -287,13 +417,25 @@
 
       function updateSubmitState() {
         const sameLanguage = sourceLanguage.value === targetLanguage.value;
-        submitButton.disabled = busy || sameLanguage;
+        submitButton.disabled = busy || settingsBusy || sameLanguage;
         if (sameLanguage) {
           message.textContent = "Choose different source and target languages.";
         } else if (statusLabel.textContent === "Ready") {
           message.textContent = "Choose a video to begin.";
         }
       }
+
+      function updateModeChip() {
+        const labels = {
+          mms: "Fast Uzbek (MMS)",
+          auto: "Hybrid Uzbek (Sayro then MMS)",
+          sayro: "Sayro Only",
+        };
+        modeChip.textContent = labels[uzbekTtsMode.value] || "Fast Uzbek (MMS)";
+      }
+
+      updateSubmitState();
+      loadSettings();
     </script>
   </body>
 </html>

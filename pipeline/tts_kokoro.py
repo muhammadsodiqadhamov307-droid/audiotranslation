@@ -1,4 +1,5 @@
 import os
+import sys
 
 import numpy as np
 import soundfile as sf
@@ -7,6 +8,23 @@ from settings_store import apply_runtime_settings
 
 KOKORO_SAMPLE_RATE = 24000
 KOKORO_SAFE_FALLBACK = ("a", "af_heart")
+_ATTACHED_STREAMS = []
+
+
+def _ensure_console_streams():
+    for name, backup_name in (("stderr", "__stderr__"), ("stdout", "__stdout__")):
+        stream = getattr(sys, name, None)
+        if stream is not None:
+            continue
+
+        backup = getattr(sys, backup_name, None)
+        if backup is not None:
+            setattr(sys, name, backup)
+            continue
+
+        stream = open(os.devnull, "w", encoding="utf-8")
+        _ATTACHED_STREAMS.append(stream)
+        setattr(sys, name, stream)
 
 
 class KokoroEngine:
@@ -24,6 +42,7 @@ class KokoroEngine:
         if self.pipeline is not None:
             return
 
+        _ensure_console_streams()
         from kokoro import KPipeline
         apply_runtime_settings()
 

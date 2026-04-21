@@ -14,6 +14,10 @@
             <p class="eyebrow">Local video dubbing</p>
             <h1 id="page-title">Translate your video into a new voice.</h1>
             <p class="lede">Upload a video, choose languages, save your API keys once, and get an MP4 with dubbed audio plus a matching SRT subtitle file.</p>
+            <div class="intro-actions">
+              <button id="open-settings" class="secondary-button" type="button">Settings</button>
+              <p id="settings-summary" class="settings-summary">Saved settings loaded.</p>
+            </div>
           </div>
           <img
             class="studio-image"
@@ -21,63 +25,6 @@
             alt="Studio microphone beside audio equipment"
           />
         </div>
-
-        <section class="settings-panel" aria-labelledby="settings-title">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Settings</p>
-              <h2 id="settings-title">Connect your models and choose how Uzbek dubbing behaves.</h2>
-            </div>
-            <p id="settings-status" class="settings-status">Loading saved settings.</p>
-          </div>
-
-          <form id="settings-form" class="settings-form">
-            <div class="settings-grid">
-              <label>
-                <span>Gemini API Key</span>
-                <input id="gemini-api-key" type="password" placeholder="Paste only if you want to replace the saved key" />
-                <small id="gemini-api-key-status" class="field-note">Checking saved key.</small>
-              </label>
-
-              <label>
-                <span>Hugging Face Token</span>
-                <input id="hf-token" type="password" placeholder="Paste only if you want to replace the saved token" />
-                <small id="hf-token-status" class="field-note">Checking saved token.</small>
-              </label>
-
-              <label>
-                <span>Uzbek TTS Mode</span>
-                <select id="uzbek-tts-mode">
-                  <option value="mms">Fast Uzbek (MMS)</option>
-                  <option value="auto">Hybrid Uzbek (Sayro then MMS)</option>
-                  <option value="sayro">Sayro Only</option>
-                </select>
-                <small class="field-note">Use MMS on older PCs. Use Sayro on stronger hardware.</small>
-              </label>
-
-              <label>
-                <span>Sayro Device</span>
-                <select id="sayro-device">
-                  <option value="cpu">CPU</option>
-                  <option value="auto">Auto</option>
-                  <option value="cuda:0">CUDA GPU</option>
-                </select>
-                <small class="field-note">Leave this on CPU for this machine. Switch to CUDA on a capable NVIDIA PC.</small>
-              </label>
-            </div>
-
-            <label class="full-width">
-              <span>Gemini Model Order</span>
-              <input id="gemini-transcribe-models" type="text" />
-              <small class="field-note">Comma-separated fallback order for transcription and translation.</small>
-            </label>
-
-            <div class="settings-actions">
-              <button id="save-settings" type="submit">Save Settings</button>
-              <p id="settings-path" class="settings-path"></p>
-            </div>
-          </form>
-        </section>
 
         <form id="translate-form" class="controls">
           <label id="drop-zone" class="drop-zone" for="video-file">
@@ -144,6 +91,69 @@
       </section>
     </main>
 
+    <div id="settings-modal" class="modal hidden" aria-hidden="true">
+      <div id="settings-backdrop" class="modal-backdrop"></div>
+      <section class="modal-panel settings-panel" aria-labelledby="settings-title" aria-modal="true" role="dialog">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Settings</p>
+            <h2 id="settings-title">Connect your models and choose how Uzbek dubbing behaves.</h2>
+          </div>
+          <div class="modal-heading-actions">
+            <p id="settings-status" class="settings-status">Loading saved settings.</p>
+            <button id="close-settings" class="icon-button" type="button" aria-label="Close settings">Close</button>
+          </div>
+        </div>
+
+        <form id="settings-form" class="settings-form">
+          <div class="settings-grid">
+            <label>
+              <span>Gemini API Key</span>
+              <input id="gemini-api-key" type="password" placeholder="Paste only if you want to replace the saved key" />
+              <small id="gemini-api-key-status" class="field-note">Checking saved key.</small>
+            </label>
+
+            <label>
+              <span>Hugging Face Token</span>
+              <input id="hf-token" type="password" placeholder="Paste only if you want to replace the saved token" />
+              <small id="hf-token-status" class="field-note">Checking saved token.</small>
+            </label>
+
+            <label>
+              <span>Uzbek TTS Mode</span>
+              <select id="uzbek-tts-mode">
+                <option value="mms">Fast Uzbek (MMS)</option>
+                <option value="auto">Hybrid Uzbek (Sayro then MMS)</option>
+                <option value="sayro">Sayro Only</option>
+              </select>
+              <small class="field-note">Use MMS on older PCs. Use Sayro on stronger hardware.</small>
+            </label>
+
+            <label>
+              <span>Sayro Device</span>
+              <select id="sayro-device">
+                <option value="cpu">CPU</option>
+                <option value="auto">Auto</option>
+                <option value="cuda:0">CUDA GPU</option>
+              </select>
+              <small class="field-note">Leave this on CPU for this machine. Switch to CUDA on a capable NVIDIA PC.</small>
+            </label>
+          </div>
+
+          <label class="full-width">
+            <span>Gemini Model Order</span>
+            <input id="gemini-transcribe-models" type="text" />
+            <small class="field-note">Comma-separated fallback order for transcription and translation.</small>
+          </label>
+
+          <div class="settings-actions">
+            <button id="save-settings" type="submit">Save Settings</button>
+            <p id="settings-path" class="settings-path"></p>
+          </div>
+        </form>
+      </section>
+    </div>
+
     <script>
       const CHUNK_SIZE = 8 * 1024 * 1024;
       const form = document.querySelector("#translate-form");
@@ -174,6 +184,11 @@
       const geminiApiKeyStatus = document.querySelector("#gemini-api-key-status");
       const hfTokenStatus = document.querySelector("#hf-token-status");
       const modeChip = document.querySelector("#mode-chip");
+      const settingsModal = document.querySelector("#settings-modal");
+      const settingsBackdrop = document.querySelector("#settings-backdrop");
+      const openSettingsButton = document.querySelector("#open-settings");
+      const closeSettingsButton = document.querySelector("#close-settings");
+      const settingsSummary = document.querySelector("#settings-summary");
       let busy = false;
       let settingsBusy = false;
 
@@ -231,8 +246,10 @@
           geminiApiKey.value = "";
           hfToken.value = "";
           settingsStatus.textContent = "Settings saved.";
+          settingsSummary.textContent = "Settings saved.";
         } catch (error) {
           settingsStatus.textContent = error.message;
+          settingsSummary.textContent = error.message;
         } finally {
           settingsBusy = false;
           saveSettingsButton.disabled = false;
@@ -284,8 +301,10 @@
           if (!response.ok) throw new Error(apiError(payload, "Could not load settings."));
           applySettings(payload.settings, payload.settings_file);
           settingsStatus.textContent = "Saved settings loaded.";
+          settingsSummary.textContent = "Saved settings loaded.";
         } catch (error) {
           settingsStatus.textContent = error.message;
+          settingsSummary.textContent = error.message;
         }
       }
 
@@ -297,6 +316,18 @@
         hfTokenStatus.textContent = settings.hf_token_set ? "A Hugging Face token is saved." : "No Hugging Face token saved yet.";
         settingsPath.textContent = filePath ? `Stored in ${filePath}` : "";
         updateModeChip();
+      }
+
+      function openSettingsModal() {
+        settingsModal.classList.remove("hidden");
+        document.body.classList.add("modal-open");
+        settingsModal.setAttribute("aria-hidden", "false");
+      }
+
+      function closeSettingsModal() {
+        settingsModal.classList.add("hidden");
+        document.body.classList.remove("modal-open");
+        settingsModal.setAttribute("aria-hidden", "true");
       }
 
       async function uploadFileInChunks(file) {
@@ -433,6 +464,15 @@
         };
         modeChip.textContent = labels[uzbekTtsMode.value] || "Fast Uzbek (MMS)";
       }
+
+      openSettingsButton.addEventListener("click", openSettingsModal);
+      closeSettingsButton.addEventListener("click", closeSettingsModal);
+      settingsBackdrop.addEventListener("click", closeSettingsModal);
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !settingsModal.classList.contains("hidden")) {
+          closeSettingsModal();
+        }
+      });
 
       updateSubmitState();
       loadSettings();

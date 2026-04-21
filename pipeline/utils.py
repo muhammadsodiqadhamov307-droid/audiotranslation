@@ -7,6 +7,18 @@ class FFmpegError(RuntimeError):
     pass
 
 
+def _hidden_subprocess_kwargs():
+    if subprocess.os.name != "nt":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
+
+
 def ensure_ffmpeg():
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         raise FFmpegError("FFmpeg and FFprobe must be installed and available on PATH.")
@@ -21,6 +33,7 @@ def run_command(command, *, cwd=None):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        **_hidden_subprocess_kwargs(),
     )
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip()
@@ -45,6 +58,7 @@ def probe_duration(path):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        **_hidden_subprocess_kwargs(),
     )
     if completed.returncode != 0:
         raise FFmpegError(f"Could not read media duration: {completed.stderr.strip()}")
